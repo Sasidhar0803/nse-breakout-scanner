@@ -1,18 +1,18 @@
 # ──────────────────────────────────────────────────────────────
-#  NSE BREAKOUT SCANNER
-#  Scans NSE stocks for your breakout strategy conditions
+#  NSE BREAKOUT SCANNER — FULL MARKET (~1800 NSE Stocks)
 #  Runs daily via GitHub Actions at 4 PM IST (weekdays only)
 # ──────────────────────────────────────────────────────────────
 
 import yfinance as yf
 import pandas as pd
 import requests
-from datetime import datetime
 import time
 import os
+import io
+from datetime import datetime
 
 # ──────────────────────────────────────────────────────────────
-#  CREDENTIALS — stored safely in GitHub Secrets (not here)
+#  CREDENTIALS — stored in GitHub Secrets
 # ──────────────────────────────────────────────────────────────
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -22,60 +22,173 @@ TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 #  STRATEGY SETTINGS
 # ──────────────────────────────────────────────────────────────
 
-VOL_MULTIPLIER  = 1.5    # volume must be 1.5x the 30-day average
-VOL_MA_PERIOD   = 30     # 30-day average volume
-LOOKBACK_DAYS   = 252    # 52-week high lookback
-EMA_PERIOD      = 21     # 21 EMA
+VOL_MULTIPLIER  = 1.5
+VOL_MA_PERIOD   = 30
+LOOKBACK_DAYS   = 252
+EMA_PERIOD      = 21
+MIN_PRICE       = 100.0
+MAX_PRICE       = 2000.0
+MIN_VOLUME      = 50000
 
 # ──────────────────────────────────────────────────────────────
-#  NSE STOCK LIST — Nifty 500 components
+#  STOCK LIST — ~1800 NSE stocks across all segments
 # ──────────────────────────────────────────────────────────────
 
-NSE_STOCKS = [
-    "RELIANCE.NS","TCS.NS","HDFCBANK.NS","BHARTIARTL.NS","ICICIBANK.NS",
-    "SBIN.NS","INFY.NS","HINDUNILVR.NS","ITC.NS","KOTAKBANK.NS",
-    "LT.NS","HCLTECH.NS","BAJFINANCE.NS","MARUTI.NS","SUNPHARMA.NS",
-    "ONGC.NS","NTPC.NS","TITAN.NS","AXISBANK.NS","ADANIENT.NS",
-    "ADANIPORTS.NS","BAJAJFINSV.NS","WIPRO.NS","ULTRACEMCO.NS","POWERGRID.NS",
-    "NESTLEIND.NS","ASIANPAINT.NS","JSWSTEEL.NS","M&M.NS","TATAMOTORS.NS",
-    "COALINDIA.NS","TATASTEEL.NS","INDUSINDBK.NS","TECHM.NS","HINDALCO.NS",
-    "DRREDDY.NS","BPCL.NS","DIVISLAB.NS","BAJAJ-AUTO.NS","GRASIM.NS",
-    "CIPLA.NS","EICHERMOT.NS","TATACONSUM.NS","APOLLOHOSP.NS","HEROMOTOCO.NS",
-    "BRITANNIA.NS","SBILIFE.NS","SHRIRAMFIN.NS","HDFCLIFE.NS","ICICIGI.NS",
-    "PIDILITIND.NS","HAVELLS.NS","DABUR.NS","SIEMENS.NS","MARICO.NS",
-    "GODREJCP.NS","TORNTPHARM.NS","COLPAL.NS","BERGEPAINT.NS","MUTHOOTFIN.NS",
-    "UNIONBANK.NS","BANKBARODA.NS","CANBK.NS","PNB.NS","SAIL.NS",
-    "NMDC.NS","NATIONALUM.NS","JINDALSTEL.NS","JSPL.NS","VEDL.NS",
-    "HINDZINC.NS","APLAPOLLO.NS","ASHOKLEY.NS","TVSMOTOR.NS","BALKRISIND.NS",
-    "MRF.NS","CEAT.NS","APOLLOTYRE.NS","BOSCHLTD.NS","MOTHERSON.NS",
-    "BHARATFORG.NS","ESCORTS.NS","LTIM.NS","MPHASIS.NS","PERSISTENT.NS",
-    "COFORGE.NS","LTTS.NS","OFSS.NS","KPITTECH.NS","TATAELXSI.NS",
-    "ZOMATO.NS","IRCTC.NS","DMART.NS","TRENT.NS","PAGEIND.NS",
-    "LALPATHLAB.NS","METROPOLIS.NS","MAXHEALTH.NS","FORTIS.NS","YESBANK.NS",
-    "IDFCFIRSTB.NS","FEDERALBNK.NS","RBLBANK.NS","AUBANK.NS","CHOLAFIN.NS",
-    "M&MFIN.NS","MANAPPURAM.NS","LICHSGFIN.NS","PNBHOUSING.NS","CANFINHOME.NS",
-    "SBICARD.NS","BANDHANBNK.NS","ADANIPOWER.NS","TATAPOWER.NS","TORNTPOWER.NS",
-    "CESC.NS","NHPC.NS","SJVN.NS","RECLTD.NS","PFC.NS",
-    "IREDA.NS","ATGL.NS","IGL.NS","MGL.NS","GAIL.NS",
-    "PETRONET.NS","HINDPETRO.NS","IOC.NS","AUROPHARMA.NS","LUPIN.NS",
-    "BIOCON.NS","ALKEM.NS","IPCA.NS","LAURUSLABS.NS","GRANULES.NS",
-    "NATCOPHARM.NS","MEDPLUS.NS","VOLTAS.NS","BLUESTARCO.NS","CROMPTON.NS",
-    "VBL.NS","UNITDSPR.NS","RADICO.NS","MCDOWELL-N.NS","ZYDUSLIFE.NS",
-    "GLENMARK.NS","OBEROIRLTY.NS","DLF.NS","GODREJPROP.NS","PRESTIGE.NS",
-    "BRIGADE.NS","PHOENIXLTD.NS","SOBHA.NS","INDHOTEL.NS","EIHOTEL.NS",
-    "LEMONTRE.NS","BEL.NS","HAL.NS","COCHINSHIP.NS","GRSE.NS",
-    "MAZAGON.NS","BEML.NS","RVNL.NS","IRFC.NS","HUDCO.NS",
-    "NBCC.NS","BHARATDYN.NS","DATAPATTNS.NS","DELHIVERY.NS","BLUEDART.NS",
-    "POLYCAB.NS","KEI.NS","AMARARAJA.NS","EXIDEIND.NS","MINDA.NS",
-    "ENDURANCE.NS","SUNDRMFAST.NS","AVANTIFEEDS.NS","SKFINDIA.NS","SCHAEFFLER.NS",
-    "TIMKEN.NS","GRINDWELL.NS","CUMMINSIND.NS","THERMAX.NS","BHEL.NS",
-    "ABB.NS","AIAENG.NS","ELGIEQUIP.NS","KIRLOSENG.NS","FINOLEX.NS",
-    "HBLPOWER.NS","KARURVYSYA.NS","CUB.NS","EQUITASBNK.NS","UJJIVANSFB.NS",
-    "CREDITACC.NS","SPANDANA.NS","HOMEFIRST.NS","AAVAS.NS","MANYAVAR.NS",
-    "RAYMOND.NS","ABFRL.NS","TTKPRESTIG.NS","WHIRLPOOL.NS","ORIENTELEC.NS",
-]
+def get_nse_stocks():
+    """Try live NSE fetch first, fall back to comprehensive hardcoded list."""
 
-NSE_STOCKS = list(dict.fromkeys(NSE_STOCKS))  # remove duplicates
+    # Try live fetch from NSE
+    try:
+        print("  📥 Trying live NSE stock list...")
+        session = requests.Session()
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Referer": "https://www.nseindia.com/",
+        }
+        session.get("https://www.nseindia.com", headers=headers, timeout=10)
+        time.sleep(2)
+        r = session.get("https://archives.nseindia.com/content/equities/EQUITY_L.csv", headers=headers, timeout=20)
+        if r.status_code == 200 and len(r.text) > 5000:
+            df = pd.read_csv(io.StringIO(r.text))
+            if "SYMBOL" in df.columns:
+                syms = df["SYMBOL"].dropna().str.strip().tolist()
+                yf_syms = [f"{s}.NS" for s in syms if isinstance(s, str) and len(s) > 0]
+                if len(yf_syms) > 1000:
+                    print(f"  ✅ Live fetch: {len(yf_syms)} stocks from NSE")
+                    return yf_syms
+    except Exception as e:
+        print(f"  ⚠ Live fetch failed: {e}")
+
+    # Fall back to comprehensive hardcoded list
+    print("  📋 Using comprehensive hardcoded list...")
+    return get_full_stock_list()
+
+
+def get_full_stock_list():
+    raw = """RELIANCE,TCS,HDFCBANK,BHARTIARTL,ICICIBANK,SBIN,INFY,HINDUNILVR,ITC,KOTAKBANK,
+LT,HCLTECH,BAJFINANCE,MARUTI,SUNPHARMA,ONGC,NTPC,TITAN,AXISBANK,ADANIENT,
+ADANIPORTS,BAJAJFINSV,WIPRO,ULTRACEMCO,POWERGRID,NESTLEIND,ASIANPAINT,JSWSTEEL,
+M&M,TATAMOTORS,COALINDIA,TATASTEEL,INDUSINDBK,TECHM,HINDALCO,DRREDDY,BPCL,
+DIVISLAB,BAJAJ-AUTO,GRASIM,CIPLA,EICHERMOT,TATACONSUM,APOLLOHOSP,HEROMOTOCO,
+BRITANNIA,SBILIFE,SHRIRAMFIN,HDFCLIFE,ICICIGI,PIDILITIND,HAVELLS,DABUR,SIEMENS,
+MARICO,GODREJCP,TORNTPHARM,COLPAL,BERGEPAINT,MUTHOOTFIN,UNIONBANK,BANKBARODA,
+CANBK,PNB,SAIL,NMDC,NATIONALUM,JINDALSTEL,JSPL,VEDL,HINDZINC,APLAPOLLO,
+ASHOKLEY,TVSMOTOR,BALKRISIND,MRF,CEAT,APOLLOTYRE,BOSCHLTD,MOTHERSON,BHARATFORG,
+ESCORTS,LTIM,MPHASIS,PERSISTENT,COFORGE,LTTS,OFSS,KPITTECH,TATAELXSI,ZOMATO,
+IRCTC,DMART,TRENT,PAGEIND,ABFRL,RAYMOND,MANYAVAR,LALPATHLAB,METROPOLIS,
+MAXHEALTH,FORTIS,YESBANK,IDFCFIRSTB,FEDERALBNK,KARURVYSYA,CUB,RBLBANK,AUBANK,
+UJJIVANSFB,EQUITASBNK,ESAFSFB,CHOLAFIN,M&MFIN,MANAPPURAM,LICHSGFIN,PNBHOUSING,
+CANFINHOME,HOMEFIRST,AAVAS,SBICARD,CREDITACC,SPANDANA,BANDHANBNK,ADANIPOWER,
+TATAPOWER,TORNTPOWER,CESC,NHPC,SJVN,RECLTD,PFC,IREDA,ATGL,IGL,MGL,GAIL,
+PETRONET,HINDPETRO,IOC,MRPL,CHENNPETRO,CASTROLIND,AUROPHARMA,LUPIN,BIOCON,
+ALKEM,IPCA,GLAXO,PFIZER,ABBOTINDIA,SANOFI,AJANTPHARM,LAURUSLABS,GRANULES,
+NATCOPHARM,JBCHEPHARM,MEDPLUS,ERIS,GLENMARK,WOCKPHARMA,STRIDES,SOLARA,SEQUENT,
+NARAYANHRUD,RAINBOW,KIMS,SHALBY,NEULANDLAB,SUDARSCHEM,SHILPAMED,MARKSANS,
+VOLTAS,BLUESTARCO,CROMPTON,ORIENTELEC,AMBER,DIXON,VGUARD,BAJAJELEC,VBL,
+UNITDSPR,RADICO,MCDOWELL-N,GLOBUSSPR,TILAKNAGAR,TTKPRESTIG,WHIRLPOOL,CAMPUS,
+BATA,METRO,RELAXO,LIBERTY,VEDANT,JUBLFOOD,WESTLIFE,DEVYANI,SAPPHIREFDS,
+NYKAA,POLICYBZR,CARTRADE,EASEMYTRIP,INFOEDGE,TEAMLEASE,QUESS,CRISIL,CDSL,
+BSE,MCX,ANGELONE,MOTILALOFS,ICICIPRULI,HDFCAMC,UTIAMC,NIPPONLIFE,360ONE,
+NUVAMA,EDELWEISS,BAJAJHLDNG,ABCAPITAL,SUNDARMFIN,REPCO,APTUS,SBFC,
+OBEROIRLTY,DLF,GODREJPROP,PRESTIGE,BRIGADE,PHOENIXLTD,SOBHA,MAHLIFE,
+KOLTEPATIL,SUNTECK,LODHA,ANANTRAJ,NESCO,INDIAMART,RVNL,IRFC,HUDCO,NBCC,
+BEL,HAL,COCHINSHIP,GRSE,MAZAGON,BEML,BHARATDYN,DATAPATTNS,MTAR,ASTRAZEN,
+AARTI,DEEPAKNITRITE,NAVINFLUOR,ATUL,VINATI,CLEAN,FINEORG,GALAXYSURF,
+ALKYLAMINE,PCBL,TATACHEM,GNFC,FACT,CHAMBAL,COROMANDEL,NFL,RCF,NOCIL,
+AKZOINDIA,KANSAINER,INDIGO,JKLAKSHMI,AMBUJA,ACC,SHREECEM,RAMCOCEM,
+HEIDELBERG,BIRLACORPN,JKCEMENT,PRISM,MANGALAM,HIL,NUVOCO,
+VARDHMAN,TRIDENT,WELSPUN,ARVIND,NITIN,HIMATSEIDE,FILATEX,
+ZEEL,SUNTV,PVRINOX,INOXGREEN,NETWORK18,TV18BRDCST,DBCORP,SAREGAMA,TIPS,
+BHARTIARTL,TATACOMM,HFCL,STLTECH,ITI,RAILTEL,
+AVANTIFEEDS,KRBL,USHAMARTIN,GODREJAGRO,KSCL,DHANUKA,BAYER,RALLIS,PI,UPL,
+KEC,VOLTAMP,KALPATPOWR,JSWENERGY,RPOWER,GIPCL,JPPOWER,BFUTILITIE,
+GRUH,FIVE-STAR,UGROCAP,PAISALO,FINPIPE,IIFL,IIFLSEC,GODIGIT,MAXFINSERV,
+TATAINVEST,MHRIL,MAHINDCIE,TITAGARH,TEXRAIL,KERNEX,
+VARROC,LUMAX,FIEM,SAMVARDHANA,SUBROS,UCAL,SETCO,WABCO,
+KNRCON,PNC,HGINFRA,DILIPBUILDCON,SADBHAV,IRB,ASHOKA,
+NAVNETEDUL,CAPACITE,AHLUCONT,PSPPROJECT,JMC,
+WELCORP,SHANKARA,PRAKASH,HITECH,ELECTCAST,NILE,GRAVITA,
+SURYAROSNI,EMAMILTD,JYOTHYLAB,GILLETTE,HPCL,
+HONAUT,3MINDIA,CUMMINSIND,KIRLOSENG,ELGIEQUIP,GRINDWELL,
+CARBORUNIV,AIAENG,KSB,ISGEC,THERMAX,BHEL,ABB,CGPOWER,
+TTMT,SUNDARAM,WHEELS,SUPRAJIT,UCALFUEL,
+GAEL,HERITAGE,PARAG,DODLA,PRABHAT,HATSUN,
+KAJARIACER,SOMANYCER,ORIENTBELL,HSIL,CERA,
+GREENPANEL,CENTURYPLY,GREENPLY,ARCHIDPLY,
+KITEX,RUPA,DOLLAR,LOVABLE,VIP,SAFARI,
+LATENTVIEW,CYIENT,BIRLASOFT,HEXAWARE,ECLERX,SONATSOFTW,
+JUSTDIAL,MATRIMONY,HAPPSTMNDS,RATEGAIN,NEWGEN,BSOFT,ROUTE,
+INTELLECT,TANLA,FSL,MASTEK,ZENSAR,NIITTECH,
+DIVI,IPCA,TORNTPHARM,SUNPHARMA,DRREDDY,CIPLA,BIOCON,
+SCHAEFFLER,TIMKEN,SKFINDIA,NRB,CRAFTSMAN,RAMKRISHNA,
+TIINDIA,MINDA,ENDURANCE,SUNDRMFAST,GABRIEL,
+JKTYRE,GOODYEAR,PTCIL,
+PRICOL,KALYANKJIL,GOLDIAM,THANGAMAYL,RAJESHEXPO,SENCO,KALYAN,
+CONCOR,ALLCARGO,GDPL,VRL,SICAL,SHREYAS,SCI,
+DELHIVERY,BLUEDART,GATI,TCI,MAHLOG,
+POLYCAB,KEI,HBLPOWER,AMARARAJA,EXIDEIND,
+LEMONTRE,CHALET,INDHOTEL,EIHOTEL,
+IPCALAB,AJANTPHARM,LAURUSLABS,GRANULES,
+SBCFINANCE,UJJIVANSF,FINPIPE,PAISALO,
+MTAR,DATAPATTNS,PARAS,ZEN,DCAL,
+AMBER,DIXON,VGUARD,BAJAJELEC,SYSKA,
+NYKAA,POLICYBZR,CARTRADE,EASEMYTRIP,
+SWIGGY,PAYTM,ZOMATO,IRCTC,
+PNBGILTS,TFCILTD,IFCI,IDFC,
+GPIL,RATNAMANI,MAN,APL,
+WELCORP,JSL,ISMT,SUNFLAG,
+RAIN,GHCL,BASF,AKZOINDIA,
+GUJALKALI,DEEPAKNTR,AARTI,
+TATACHEMICAL,CHAMBAL,GNFC,
+PIDILITIND,ASTRAL,SUPREMEIND,
+JYOTHY,KRIDHAN,VSSL,SRFL,
+MMTC,NALCO,MOIL,GMRINFRA,
+ADANIGREEN,ADANIWILMAR,ADANITRANS,ADANIGAS,
+JSWINFRA,JSWHL,JSWENERGY,
+TATAPOWER,TATACOMM,TATATECH,TATAINVEST,TATAMETALI,
+RELIANCEIND,JIOFINANCIAL,
+HDFCBANK,HDFCLIFE,HDFCAMC,HDFCERGO,
+ICICIBANK,ICICIPRULI,ICICIGI,ICICISEC,
+BAJAJFINANCE,BAJAJFINSV,BAJAJHLDNG,BAJAJ-AUTO,
+LICI,GICRE,NIACL,STARHEALTH,
+IDEA,GTPL,HATHWAY,DEN,SITI,
+TVSMOTOR,TVS,SUNDTVS,TVSHOLDINGS,
+MAHINDRA,MAHINDCIE,MHRIL,MAHLOG,MAHLIFE,
+GODREJCP,GODREJPROP,GODREJIND,GODREJAGRO,
+EMAMI,EMAMILTD,EMAMIREAL,
+PIRAMAL,PIRHEALTH,PIRFCL,
+TORNT,TORNTPHARM,TORNTPOWER,
+DABUR,DABURIND,
+MARICO,MARICOIND,
+COLGATE,COLPAL,
+NESTLE,NESTLEIND,
+PFIZER,PFIZERINDIA,
+GLAXO,GLAXOSMITHKLINE,
+SANOFI,SANOFIPHARM,
+ABBOTINDIA,ABBOTT,
+3M,3MINDIA,
+HONEYWELL,HONAUT,
+SIEMENS,SIEMENSHC,
+ABB,ABBINDIA,
+CEAT,CEATLTD,
+MRF,MRFLTD,
+APOLLOTYRE,APOLLO,
+JKTYRE,JKTYREIND,
+TVSSRICHAKRA,TVSSRICHAKRA,
+RPSGVENT,RPSG,CESC"""
+
+    symbols = []
+    for line in raw.strip().split("\n"):
+        for sym in line.split(","):
+            sym = sym.strip().upper()
+            if sym and len(sym) > 0 and sym not in symbols:
+                symbols.append(sym)
+
+    yf_syms = [f"{s}.NS" for s in symbols if len(s) > 0]
+    print(f"  ✅ Hardcoded list: {len(yf_syms)} stocks")
+    return yf_syms
 
 
 # ──────────────────────────────────────────────────────────────
@@ -86,48 +199,51 @@ def send_telegram(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ Telegram credentials missing.")
         return
-    url     = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
-    try:
-        r = requests.post(url, data=payload, timeout=10)
-        if r.status_code == 200:
-            print("✅ Telegram message sent.")
-        else:
-            print(f"❌ Telegram error: {r.text}")
-    except Exception as e:
-        print(f"❌ Telegram failed: {e}")
+    url    = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
+    for chunk in chunks:
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": chunk, "parse_mode": "HTML"}
+        try:
+            r = requests.post(url, data=payload, timeout=10)
+            if r.status_code == 200:
+                print("✅ Telegram sent.")
+            else:
+                print(f"❌ Telegram error: {r.text}")
+        except Exception as e:
+            print(f"❌ Telegram failed: {e}")
+        time.sleep(0.5)
 
 
 # ──────────────────────────────────────────────────────────────
-#  SCANNER
+#  CHECK SINGLE STOCK
 # ──────────────────────────────────────────────────────────────
 
 def check_stock(symbol):
     try:
         df = yf.download(symbol, period="14mo", interval="1d",
                          progress=False, auto_adjust=True)
-
         if df is None or len(df) < LOOKBACK_DAYS + 5:
             return None
-
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-
         df = df.dropna()
 
         today        = df.iloc[-1]
         prev_bars    = df.iloc[-(LOOKBACK_DAYS + 1):-1]
-
         today_close  = float(today["Close"])
         today_open   = float(today["Open"])
         today_low    = float(today["Low"])
         today_volume = float(today["Volume"])
 
-        week52_high  = float(prev_bars["High"].max())
-        avg_volume   = float(df["Volume"].iloc[-VOL_MA_PERIOD - 1:-1].mean())
-        ema21        = float(df["Close"].ewm(span=EMA_PERIOD, adjust=False).mean().iloc[-1])
+        if today_close < MIN_PRICE or today_close > MAX_PRICE:
+            return None
+        if today_volume < MIN_VOLUME:
+            return None
 
-        # ── CONDITIONS ──
+        week52_high = float(prev_bars["High"].max())
+        avg_volume  = float(df["Volume"].iloc[-VOL_MA_PERIOD - 1:-1].mean())
+        ema21       = float(df["Close"].ewm(span=EMA_PERIOD, adjust=False).mean().iloc[-1])
+
         price_breakout = today_close > week52_high
         vol_ratio      = today_volume / avg_volume if avg_volume > 0 else 0
         vol_ok         = vol_ratio >= VOL_MULTIPLIER
@@ -135,13 +251,13 @@ def check_stock(symbol):
         above_ema      = today_close > ema21
 
         if price_breakout and vol_ok and green_candle and above_ema:
-            all_time_high  = float(df["High"].max())
-            breakout_type  = "ATH 🏆" if abs(week52_high - all_time_high) < 0.01 * week52_high else "52WH 📈"
-            sl_price       = today_low
-            sl_pct         = round((today_close - sl_price) / today_close * 100, 2)
-            target_price   = round(today_close + 2 * (today_close - sl_price), 2)
-            target_pct     = round(sl_pct * 2, 2)
-
+            all_time_high = float(df["High"].max())
+            is_ath        = abs(week52_high - all_time_high) < 0.01 * week52_high
+            breakout_type = "ATH 🏆" if is_ath else "52WH 📈"
+            sl_price      = today_low
+            sl_pct        = round((today_close - sl_price) / today_close * 100, 2)
+            target_price  = round(today_close + 2 * (today_close - sl_price), 2)
+            target_pct    = round(sl_pct * 2, 2)
             return {
                 "symbol"       : symbol.replace(".NS", ""),
                 "close"        : round(today_close, 2),
@@ -154,10 +270,9 @@ def check_stock(symbol):
                 "target_pct"   : target_pct,
                 "ema21"        : round(ema21, 2),
             }
-
-    except Exception as e:
-        print(f"  ⚠ {symbol}: {e}")
+    except Exception:
         return None
+    return None
 
 
 # ──────────────────────────────────────────────────────────────
@@ -165,59 +280,69 @@ def check_stock(symbol):
 # ──────────────────────────────────────────────────────────────
 
 def run_scanner():
-    print(f"\n{'='*50}")
-    print(f"  NSE Breakout Scanner — {datetime.now().strftime('%d %b %Y %H:%M')}")
-    print(f"  Scanning {len(NSE_STOCKS)} stocks...")
-    print(f"{'='*50}\n")
+    start_time = time.time()
+    today_str  = datetime.now().strftime("%d %b %Y")
+
+    print(f"\n{'='*55}")
+    print(f"  NSE FULL MARKET SCANNER — {today_str}")
+    print(f"{'='*55}\n")
+
+    stocks = get_nse_stocks()
+    total  = len(stocks)
+    print(f"  🔍 Scanning {total} stocks...\n")
 
     results = []
 
-    for i, symbol in enumerate(NSE_STOCKS, 1):
-        print(f"  [{i:>3}/{len(NSE_STOCKS)}] {symbol:<25}", end="\r")
+    for i, symbol in enumerate(stocks, 1):
+        if i % 100 == 0 or i == 1:
+            elapsed = round(time.time() - start_time)
+            print(f"  Progress: {i}/{total} | Found: {len(results)} | Time: {elapsed}s")
         result = check_stock(symbol)
         if result:
             results.append(result)
-            print(f"  ✅ BREAKOUT: {symbol}")
-        time.sleep(0.3)
+            print(f"  ✅ BREAKOUT: {result['symbol']} | {result['breakout_type']} | Vol: {result['vol_ratio']}x")
+        time.sleep(0.25)
 
-    print(f"\n\n  Done. Found {len(results)} breakout(s).\n")
-
-    today_str = datetime.now().strftime("%d %b %Y")
+    elapsed_total = round(time.time() - start_time)
+    print(f"\n  Scan complete in {elapsed_total}s | Breakouts: {len(results)}\n")
 
     if not results:
-        message = (
-            f"📊 <b>NSE Breakout Scanner — {today_str}</b>\n\n"
-            f"No stocks found today.\n\n"
-            f"<i>Conditions checked:\n"
-            f"• Close above 52-Week High\n"
-            f"• Volume ≥ {VOL_MULTIPLIER}x 30-day average\n"
-            f"• Green candle (close &gt; open)\n"
-            f"• Price above 21 EMA</i>"
+        send_telegram(
+            f"📊 <b>NSE Full Market Scanner — {today_str}</b>\n\n"
+            f"No breakouts found today across {total} stocks.\n\n"
+            f"<i>Filters: ₹{int(MIN_PRICE)}–₹{int(MAX_PRICE)} | "
+            f"Vol ≥{VOL_MULTIPLIER}x | Green candle | Above 21 EMA</i>"
         )
     else:
-        lines = [
-            f"🚀 <b>NSE Breakout Scanner — {today_str}</b>\n",
-            f"<b>{len(results)} stock(s) found:</b>\n"
-        ]
-        for r in sorted(results, key=lambda x: x["vol_ratio"], reverse=True):
-            lines.append(
-                f"──────────────────\n"
-                f"📌 <b>{r['symbol']}</b>  {r['breakout_type']}\n"
-                f"   Close    : ₹{r['close']}\n"
-                f"   52W High : ₹{r['week52_high']}\n"
-                f"   Volume   : {r['vol_ratio']}x avg\n"
-                f"   21 EMA   : ₹{r['ema21']}\n"
-                f"   SL       : ₹{r['sl_price']} (-{r['sl_pct']}%)\n"
-                f"   Target   : ₹{r['target_price']} (+{r['target_pct']}%)\n"
-            )
-        lines.append("──────────────────")
-        lines.append(
-            f"\n⚠️ <i>Check chart before entry.\n"
-            f"Enter next day only if price holds above breakout level.</i>"
+        results.sort(key=lambda x: x["vol_ratio"], reverse=True)
+        send_telegram(
+            f"🚀 <b>NSE Full Market Scanner — {today_str}</b>\n\n"
+            f"<b>{len(results)} breakout(s) found</b> across {total} stocks\n"
+            f"Sorted by volume strength ↓"
         )
-        message = "\n".join(lines)
-
-    send_telegram(message)
+        time.sleep(0.5)
+        for batch_start in range(0, len(results), 10):
+            batch = results[batch_start:batch_start + 10]
+            lines = []
+            for r in batch:
+                lines.append(
+                    f"──────────────────\n"
+                    f"📌 <b>{r['symbol']}</b>  {r['breakout_type']}\n"
+                    f"   Close    : ₹{r['close']}\n"
+                    f"   52W High : ₹{r['week52_high']}\n"
+                    f"   Volume   : {r['vol_ratio']}x avg\n"
+                    f"   21 EMA   : ₹{r['ema21']}\n"
+                    f"   SL       : ₹{r['sl_price']} (-{r['sl_pct']}%)\n"
+                    f"   Target   : ₹{r['target_price']} (+{r['target_pct']}%)\n"
+                )
+            send_telegram("\n".join(lines))
+            time.sleep(0.5)
+        send_telegram(
+            f"──────────────────\n"
+            f"⚠️ <i>Always check chart before entry.\n"
+            f"Enter next day only if price holds above breakout level.\n"
+            f"This is a scanner — not a buy recommendation.</i>"
+        )
 
 
 if __name__ == "__main__":
