@@ -35,34 +35,8 @@ MIN_VOLUME      = 50000
 # ──────────────────────────────────────────────────────────────
 
 def get_nse_stocks():
-    """Try live NSE fetch first, fall back to comprehensive hardcoded list."""
-
-    # Try live fetch from NSE
-    try:
-        print("  📥 Trying live NSE stock list...")
-        session = requests.Session()
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Referer": "https://www.nseindia.com/",
-        }
-        session.get("https://www.nseindia.com", headers=headers, timeout=10)
-        time.sleep(2)
-        r = session.get("https://archives.nseindia.com/content/equities/EQUITY_L.csv", headers=headers, timeout=20)
-        if r.status_code == 200 and len(r.text) > 5000:
-            df = pd.read_csv(io.StringIO(r.text))
-            if "SYMBOL" in df.columns:
-                syms = df["SYMBOL"].dropna().str.strip().tolist()
-                yf_syms = [f"{s}.NS" for s in syms if isinstance(s, str) and len(s) > 0]
-                if len(yf_syms) > 1000:
-                    print(f"  ✅ Live fetch: {len(yf_syms)} stocks from NSE")
-                    return yf_syms
-    except Exception as e:
-        print(f"  ⚠ Live fetch failed: {e}")
-
-    # Fall back to comprehensive hardcoded list
-    print("  📋 Using comprehensive hardcoded list...")
+    """Use curated Nifty 500 list - reliable, fast, no rate limiting."""
+    print("  📋 Using curated Nifty 500 stock list...")
     return get_full_stock_list()
 
 
