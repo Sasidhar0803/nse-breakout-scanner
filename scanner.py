@@ -237,20 +237,44 @@ def check_stock(symbol):
         today_low    = float(today["Low"])
         today_volume = float(today["Volume"])
 
+        # Debug logging for specific stocks
+        debug_stocks = ["NHIT", "SBIN", "RELIANCE"]
+        is_debug = any(d in symbol for d in debug_stocks)
+        
+        if is_debug:
+            print(f"\n  🔍 DEBUG {symbol}:")
+            print(f"     High: {today_high} | Close: {today_close} | Open: {today_open} | Vol: {today_volume}")
+
         if today_close < MIN_PRICE or today_close > MAX_PRICE:
+            if is_debug:
+                print(f"     ❌ FILTERED: Price {today_close} not in range ₹{MIN_PRICE}-₹{MAX_PRICE}")
             return None
         if today_volume < MIN_VOLUME:
+            if is_debug:
+                print(f"     ❌ FILTERED: Volume {today_volume} < {MIN_VOLUME}")
             return None
 
         week52_high = float(prev_bars["High"].max())
         avg_volume  = float(df["Volume"].iloc[-VOL_MA_PERIOD - 1:-1].mean())
         ema21       = float(df["Close"].ewm(span=EMA_PERIOD, adjust=False).mean().iloc[-1])
 
+        if is_debug:
+            print(f"     52WH: {week52_high} | 21EMA: {ema21} | AvgVol: {avg_volume}")
+
         # Breakout: today's high touched or crossed 52-week high
         price_breakout = today_high > week52_high
         vol_ratio      = today_volume / avg_volume if avg_volume > 0 else 0
         green_candle   = today_close > today_open
         above_ema      = today_close > ema21
+
+        if is_debug:
+            print(f"     Breakout check: High>{week52_high}? {price_breakout} ({today_high} vs {week52_high})")
+            print(f"     Green candle: Close>{today_open}? {green_candle} ({today_close} vs {today_open})")
+            print(f"     Above EMA: Close>{ema21}? {above_ema} ({today_close} vs {ema21})")
+            if not (price_breakout and green_candle and above_ema):
+                print(f"     ❌ FILTERED: Did not pass all conditions")
+            else:
+                print(f"     ✅ ALL CONDITIONS MET - should be in results")
 
         if price_breakout and green_candle and above_ema:
             all_time_high = float(df["High"].max())
