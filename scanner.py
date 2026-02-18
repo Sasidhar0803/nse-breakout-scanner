@@ -327,7 +327,7 @@ def run_scanner():
         if result:
             results.append(result)
             print(f"  ✅ BREAKOUT: {result['symbol']} | {result['breakout_type']} | Vol: {result['vol_ratio']}x")
-        time.sleep(0.6)
+        time.sleep(1.0)   # 1 second delay to avoid Yahoo Finance rate limits
 
     elapsed_total = round(time.time() - start_time)
     print(f"\n  Scan complete in {elapsed_total}s | Breakouts: {len(results)}\n")
@@ -373,4 +373,3 @@ def run_scanner():
 
 if __name__ == "__main__":
     run_scanner()
-
