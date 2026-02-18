@@ -22,7 +22,7 @@ TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 #  STRATEGY SETTINGS
 # ──────────────────────────────────────────────────────────────
 
-VOL_MULTIPLIER  = 1.5
+VOL_MULTIPLIER  = 1.5    # (not enforced - kept for reference in messages)
 VOL_MA_PERIOD   = 30
 LOOKBACK_DAYS   = 252
 EMA_PERIOD      = 21
@@ -229,11 +229,14 @@ def check_stock(symbol):
         df = df.dropna()
 
         today        = df.iloc[-1]
+        yesterday    = df.iloc[-2]
         prev_bars    = df.iloc[-(LOOKBACK_DAYS + 1):-1]
+        
         today_close  = float(today["Close"])
         today_open   = float(today["Open"])
         today_low    = float(today["Low"])
         today_volume = float(today["Volume"])
+        yesterday_close = float(yesterday["Close"])
 
         if today_close < MIN_PRICE or today_close > MAX_PRICE:
             return None
@@ -244,13 +247,13 @@ def check_stock(symbol):
         avg_volume  = float(df["Volume"].iloc[-VOL_MA_PERIOD - 1:-1].mean())
         ema21       = float(df["Close"].ewm(span=EMA_PERIOD, adjust=False).mean().iloc[-1])
 
-        price_breakout = today_close > week52_high
+        # FRESH BREAKOUT ONLY: today breaks out AND yesterday was still below
+        price_breakout = (today_close > week52_high) and (yesterday_close <= week52_high)
         vol_ratio      = today_volume / avg_volume if avg_volume > 0 else 0
-        vol_ok         = vol_ratio >= VOL_MULTIPLIER
         green_candle   = today_close > today_open
         above_ema      = today_close > ema21
 
-        if price_breakout and vol_ok and green_candle and above_ema:
+        if price_breakout and green_candle and above_ema:
             all_time_high = float(df["High"].max())
             is_ath        = abs(week52_high - all_time_high) < 0.01 * week52_high
             breakout_type = "ATH 🏆" if is_ath else "52WH 📈"
@@ -311,7 +314,7 @@ def run_scanner():
             f"📊 <b>NSE Full Market Scanner — {today_str}</b>\n\n"
             f"No breakouts found today across {total} stocks.\n\n"
             f"<i>Filters: ₹{int(MIN_PRICE)}–₹{int(MAX_PRICE)} | "
-            f"Vol ≥{VOL_MULTIPLIER}x | Green candle | Above 21 EMA</i>"
+            f"Green candle | Above 21 EMA | Fresh breakout only</i>"
         )
     else:
         results.sort(key=lambda x: x["vol_ratio"], reverse=True)
