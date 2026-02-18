@@ -233,6 +233,7 @@ def check_stock(symbol):
         
         today_close  = float(today["Close"])
         today_open   = float(today["Open"])
+        today_high   = float(today["High"])
         today_low    = float(today["Low"])
         today_volume = float(today["Volume"])
 
@@ -245,8 +246,8 @@ def check_stock(symbol):
         avg_volume  = float(df["Volume"].iloc[-VOL_MA_PERIOD - 1:-1].mean())
         ema21       = float(df["Close"].ewm(span=EMA_PERIOD, adjust=False).mean().iloc[-1])
 
-        # Breakout: today's close is above 52-week high
-        price_breakout = today_close > week52_high
+        # Breakout: today's high touched or crossed 52-week high
+        price_breakout = today_high > week52_high
         vol_ratio      = today_volume / avg_volume if avg_volume > 0 else 0
         green_candle   = today_close > today_open
         above_ema      = today_close > ema21
@@ -312,7 +313,7 @@ def run_scanner():
             f"📊 <b>NSE Full Market Scanner — {today_str}</b>\n\n"
             f"No breakouts found today across {total} stocks.\n\n"
             f"<i>Filters: ₹{int(MIN_PRICE)}–₹{int(MAX_PRICE)} | "
-            f"Green candle | Above 21 EMA | Close above 52WH</i>"
+            f"Green candle | Above 21 EMA | High above 52WH</i>"
         )
     else:
         results.sort(key=lambda x: x["vol_ratio"], reverse=True)
