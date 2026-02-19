@@ -1,31 +1,38 @@
-name: NSE Full Market Breakout Scanner
+name: NSE Breakout Scanner
 
 on:
   schedule:
-    - cron: '30 10 * * 1-5'
+    - cron: "30 10 * * 1-5"   # 4:00 PM IST = 10:30 UTC
   workflow_dispatch:
 
 jobs:
-  scan:
+  run-scanner:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
-          pip install yfinance==0.2.36 pandas requests
+          pip install -r requirements.txt
 
-      - name: Run full NSE breakout scanner
+      - name: Run scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python scanner.py
+
+      - name: Commit updated history.csv
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git add data/history.csv
+          git commit -m "Update history" || echo "No changes to commit"
+          git push
