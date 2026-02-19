@@ -33,11 +33,11 @@ jobs:
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
-          if [ -f data/history.csv ]; then
-  git add data/history.csv
-  git commit -m "Update history" || echo "No changes to commit"
-  git push
-else
-  echo "history.csv not created, skipping commit"
-fi
 
+          if [ -f data/history.csv ]; then
+            git add data/history.csv
+            git commit -m "Update history" || echo "No changes to commit"
+            git push
+          else
+            echo "history.csv not created, skipping commit"
+          fi
