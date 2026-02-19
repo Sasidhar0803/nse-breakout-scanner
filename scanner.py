@@ -74,6 +74,7 @@ def get_latest_bhavcopy(max_back_days=10):
     """
     for i in range(max_back_days):
         d = datetime.utcnow() - timedelta(days=i)
+        print("DEBUG date:", d.strftime("%Y-%m-%d"))
         df = download_bhavcopy(d)
         if df is not None and len(df) > 0:
             print(f"✅ Bhavcopy loaded for date: {d.strftime('%d %b %Y')}")
