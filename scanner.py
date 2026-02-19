@@ -1,76 +1,89 @@
-# ──────────────────────────────────────────────────────────────
-#  NSE BREAKOUT SCANNER — NIFTY 500 (Stable)
-#  Fixes yfinance JSONDecodeError + rate limits
-# ──────────────────────────────────────────────────────────────
-
-import yfinance as yf
 import pandas as pd
 import requests
-import time
 import os
-from datetime import datetime
-
-# OPTIONAL CACHE (Recommended for GitHub Actions)
-# If you enable this, add: pip install requests-cache
-USE_CACHE = False
-if USE_CACHE:
-    import requests_cache
-    requests_cache.install_cache("yfinance_cache", expire_after=3600)
+import time
+from datetime import datetime, timedelta
+from io import BytesIO
+import zipfile
 
 # ──────────────────────────────────────────────────────────────
-#  CREDENTIALS — stored in GitHub Secrets
+# TELEGRAM (GitHub Secrets)
 # ──────────────────────────────────────────────────────────────
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # ──────────────────────────────────────────────────────────────
-#  STRATEGY SETTINGS
+# SETTINGS
 # ──────────────────────────────────────────────────────────────
 
-VOL_MA_PERIOD   = 30
-LOOKBACK_DAYS   = 252
-EMA_PERIOD      = 21
-MIN_PRICE       = 100.0
-MAX_PRICE       = 2000.0
-MIN_VOLUME      = 50000
+LOOKBACK_DAYS = 252
+EMA_PERIOD    = 21
 
-REQUEST_DELAY   = 1.2      # safer for Yahoo (0.5 is risky)
-MAX_RETRIES     = 4        # retry failed symbols
-RETRY_WAIT_BASE = 2        # seconds
+MIN_PRICE     = 100.0
+MAX_PRICE     = 2000.0
+MIN_VOLUME    = 50000
 
-# ──────────────────────────────────────────────────────────────
-#  STOCK LIST (Curated Nifty 500)
-# ──────────────────────────────────────────────────────────────
-
-def get_full_stock_list():
-    raw = """RELIANCE,TCS,HDFCBANK,BHARTIARTL,ICICIBANK,SBIN,INFY,HINDUNILVR,ITC,KOTAKBANK,
-LT,HCLTECH,BAJFINANCE,MARUTI,SUNPHARMA,ONGC,NTPC,TITAN,AXISBANK,ADANIENT,
-ADANIPORTS,BAJAJFINSV,WIPRO,ULTRACEMCO,POWERGRID,NESTLEIND,ASIANPAINT,JSWSTEEL,
-M&M,TATAMOTORS,COALINDIA,TATASTEEL,INDUSINDBK,TECHM,HINDALCO,DRREDDY,BPCL,
-DIVISLAB,BAJAJ-AUTO,GRASIM,CIPLA,EICHERMOT,TATACONSUM,APOLLOHOSP,HEROMOTOCO,
-BRITANNIA,SBILIFE,SHRIRAMFIN,HDFCLIFE,ICICIGI,PIDILITIND,HAVELLS,DABUR,SIEMENS,
-MARICO,GODREJCP,TORNTPHARM,COLPAL,BERGEPAINT,MUTHOOTFIN,UNIONBANK,BANKBARODA,
-CANBK,PNB"""
-
-    symbols = []
-    for line in raw.strip().split("\n"):
-        for sym in line.split(","):
-            sym = sym.strip().upper()
-            if sym and sym not in symbols:
-                symbols.append(sym)
-
-    yf_syms = [f"{s}.NS" for s in symbols]
-    print(f"  ✅ Curated list: {len(yf_syms)} stocks")
-    return yf_syms
-
-
-def get_nse_stocks():
-    print("  📋 Using curated stock list...")
-    return get_full_stock_list()
+DATA_DIR      = "data"
+HISTORY_FILE  = os.path.join(DATA_DIR, "history.csv")
 
 # ──────────────────────────────────────────────────────────────
-#  TELEGRAM
+# NSE BHAVCOPY DOWNLOAD
+# ──────────────────────────────────────────────────────────────
+
+def nse_bhavcopy_url(date_obj):
+    """
+    NSE Bhavcopy (Equities) ZIP
+    Example:
+    https://archives.nseindia.com/content/historical/EQUITIES/2025/FEB/cm18FEB2025bhav.csv.zip
+    """
+    dd  = date_obj.strftime("%d")
+    mon = date_obj.strftime("%b").upper()
+    yyyy = date_obj.strftime("%Y")
+
+    return f"https://archives.nseindia.com/content/historical/EQUITIES/{yyyy}/{mon}/cm{dd}{mon}{yyyy}bhav.csv.zip"
+
+
+def download_bhavcopy(date_obj):
+    url = nse_bhavcopy_url(date_obj)
+    print(f"📥 Downloading Bhavcopy: {url}")
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "*/*",
+        "Connection": "keep-alive"
+    }
+
+    r = requests.get(url, headers=headers, timeout=30)
+    if r.status_code != 200:
+        return None
+
+    try:
+        z = zipfile.ZipFile(BytesIO(r.content))
+        name = z.namelist()[0]
+        df = pd.read_csv(z.open(name))
+        return df
+    except Exception:
+        return None
+
+
+def get_latest_bhavcopy(max_back_days=10):
+    """
+    If today's file not available (holiday/weekend),
+    it tries previous days up to max_back_days.
+    """
+    for i in range(max_back_days):
+        d = datetime.now() - timedelta(days=i)
+        df = download_bhavcopy(d)
+        if df is not None and len(df) > 0:
+            print(f"✅ Bhavcopy loaded for date: {d.strftime('%d %b %Y')}")
+            return df, d
+        time.sleep(1)
+
+    return None, None
+
+# ──────────────────────────────────────────────────────────────
+# TELEGRAM
 # ──────────────────────────────────────────────────────────────
 
 def send_telegram(message):
@@ -84,186 +97,224 @@ def send_telegram(message):
     for chunk in chunks:
         payload = {"chat_id": TELEGRAM_CHAT_ID, "text": chunk, "parse_mode": "HTML"}
         try:
-            r = requests.post(url, data=payload, timeout=15)
+            r = requests.post(url, data=payload, timeout=20)
             if r.status_code != 200:
-                print(f"❌ Telegram error: {r.text}")
+                print("❌ Telegram error:", r.text)
         except Exception as e:
-            print(f"❌ Telegram failed: {e}")
-        time.sleep(0.4)
+            print("❌ Telegram failed:", e)
+        time.sleep(0.5)
 
 # ──────────────────────────────────────────────────────────────
-#  SAFE DOWNLOAD (Fix for JSONDecodeError)
+# HISTORY STORAGE
 # ──────────────────────────────────────────────────────────────
 
-def safe_download(symbol, retries=MAX_RETRIES):
+def normalize_bhavcopy(df, date_obj):
     """
-    Yahoo often blocks GitHub Actions / fast requests.
-    This function retries with exponential backoff.
+    Bhavcopy columns typically:
+    SYMBOL, SERIES, OPEN, HIGH, LOW, CLOSE, LAST, PREVCLOSE,
+    TOTTRDQTY, TOTTRDVAL, TIMESTAMP, TOTALTRADES, ISIN
     """
-    for attempt in range(1, retries + 1):
-        try:
-            df = yf.download(
-                symbol,
-                period="14mo",
-                interval="1d",
-                progress=False,
-                auto_adjust=True,
-                threads=False
-            )
+    df = df.copy()
 
-            if df is not None and len(df) > 20:
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                return df.dropna()
+    df.columns = [c.strip().upper() for c in df.columns]
 
-        except Exception:
-            pass
+    # Keep only EQ series
+    if "SERIES" in df.columns:
+        df = df[df["SERIES"] == "EQ"]
 
-        wait = RETRY_WAIT_BASE * attempt
-        time.sleep(wait)
+    df["DATE"] = date_obj.strftime("%Y-%m-%d")
 
-    return None
+    out = df[["DATE", "SYMBOL", "OPEN", "HIGH", "LOW", "CLOSE", "TOTTRDQTY"]].copy()
+    out.rename(columns={"TOTTRDQTY": "VOLUME"}, inplace=True)
 
-# ──────────────────────────────────────────────────────────────
-#  CHECK SINGLE STOCK
-# ──────────────────────────────────────────────────────────────
+    # Ensure numeric
+    for col in ["OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"]:
+        out[col] = pd.to_numeric(out[col], errors="coerce")
 
-def check_stock(symbol):
-    df = safe_download(symbol)
-    if df is None or len(df) < LOOKBACK_DAYS + 5:
-        return None
+    out = out.dropna()
+    out["SYMBOL"] = out["SYMBOL"].astype(str).str.strip().str.upper()
 
-    today     = df.iloc[-1]
-    prev_bars = df.iloc[-(LOOKBACK_DAYS + 1):-1]
+    return out
 
-    today_close  = float(today["Close"])
-    today_open   = float(today["Open"])
-    today_high   = float(today["High"])
-    today_low    = float(today["Low"])
-    today_volume = float(today["Volume"])
 
-    if today_close < MIN_PRICE or today_close > MAX_PRICE:
-        return None
-    if today_volume < MIN_VOLUME:
-        return None
+def load_history():
+    if not os.path.exists(HISTORY_FILE):
+        return pd.DataFrame(columns=["DATE", "SYMBOL", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"])
 
-    week52_high = float(prev_bars["High"].max())
-    avg_volume  = float(df["Volume"].iloc[-VOL_MA_PERIOD - 1:-1].mean())
-    ema21       = float(df["Close"].ewm(span=EMA_PERIOD, adjust=False).mean().iloc[-1])
+    df = pd.read_csv(HISTORY_FILE)
+    df["DATE"] = pd.to_datetime(df["DATE"])
+    return df
 
-    price_breakout = today_high > week52_high
-    green_candle   = today_close > today_open
-    above_ema      = today_close > ema21
 
-    if not (price_breakout and green_candle and above_ema):
-        return None
+def save_history(df):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    df2 = df.copy()
+    df2["DATE"] = pd.to_datetime(df2["DATE"]).dt.strftime("%Y-%m-%d")
+    df2.to_csv(HISTORY_FILE, index=False)
 
-    vol_ratio = today_volume / avg_volume if avg_volume > 0 else 0
 
-    all_time_high = float(df["High"].max())
-    is_ath = abs(week52_high - all_time_high) < 0.01 * week52_high
-    breakout_type = "ATH 🏆" if is_ath else "52WH 📈"
+def update_history(history, today_df):
+    """
+    Adds today's bhavcopy rows into history and removes duplicates.
+    """
+    today_df = today_df.copy()
+    today_df["DATE"] = pd.to_datetime(today_df["DATE"])
 
-    sl_price = today_low
-    sl_pct   = round((today_close - sl_price) / today_close * 100, 2)
+    history = history.copy()
+    history["DATE"] = pd.to_datetime(history["DATE"])
 
-    target_price = round(today_close + 2 * (today_close - sl_price), 2)
-    target_pct   = round(sl_pct * 2, 2)
+    combined = pd.concat([history, today_df], ignore_index=True)
+    combined.drop_duplicates(subset=["DATE", "SYMBOL"], keep="last", inplace=True)
 
-    return {
-        "symbol": symbol.replace(".NS", ""),
-        "close": round(today_close, 2),
-        "week52_high": round(week52_high, 2),
-        "vol_ratio": round(vol_ratio, 2),
-        "breakout_type": breakout_type,
-        "sl_price": round(sl_price, 2),
-        "sl_pct": sl_pct,
-        "target_price": target_price,
-        "target_pct": target_pct,
-        "ema21": round(ema21, 2),
-    }
+    combined.sort_values(["SYMBOL", "DATE"], inplace=True)
+    return combined
 
 # ──────────────────────────────────────────────────────────────
-#  MAIN
+# INDICATORS
 # ──────────────────────────────────────────────────────────────
 
-def run_scanner():
-    start_time = time.time()
-    today_str  = datetime.now().strftime("%d %b %Y")
+def compute_ema(series, span):
+    return series.ewm(span=span, adjust=False).mean()
 
-    print(f"\n{'='*60}")
-    print(f"  NSE BREAKOUT SCANNER — {today_str}")
-    print(f"{'='*60}\n")
 
-    stocks = get_nse_stocks()
-    total  = len(stocks)
-
+def scan_breakouts(history, scan_date_str):
+    """
+    For each symbol:
+    - Use last LOOKBACK_DAYS bars before today to compute 52WH
+    - Use full bars to compute EMA21
+    """
     results = []
-    failed  = []
 
-    print(f"  🔍 Scanning {total} stocks...\n")
+    scan_date = pd.to_datetime(scan_date_str)
 
-    for i, symbol in enumerate(stocks, 1):
-        if i % 25 == 0 or i == 1:
-            elapsed = round(time.time() - start_time)
-            print(f"  Progress: {i}/{total} | Found: {len(results)} | Failed: {len(failed)} | Time: {elapsed}s")
+    # Only symbols that have today's data
+    today_rows = history[history["DATE"] == scan_date]
+    symbols_today = today_rows["SYMBOL"].unique().tolist()
 
-        try:
-            result = check_stock(symbol)
-            if result:
-                results.append(result)
-                print(f"  ✅ BREAKOUT: {result['symbol']} | {result['breakout_type']} | Vol: {result['vol_ratio']}x")
-            else:
-                # if safe_download failed, it returns None (we track)
-                pass
-        except Exception:
-            failed.append(symbol)
+    for sym in symbols_today:
+        df = history[history["SYMBOL"] == sym].sort_values("DATE")
 
-        time.sleep(REQUEST_DELAY)
+        if len(df) < LOOKBACK_DAYS + 30:
+            continue
 
-    elapsed_total = round(time.time() - start_time)
-    print(f"\n  Scan complete in {elapsed_total}s | Breakouts: {len(results)} | Failed: {len(failed)}\n")
+        # Today's row
+        today = df[df["DATE"] == scan_date]
+        if today.empty:
+            continue
+        today = today.iloc[0]
 
-    # ───────── Telegram Summary ─────────
+        today_close = float(today["CLOSE"])
+        today_open  = float(today["OPEN"])
+        today_high  = float(today["HIGH"])
+        today_low   = float(today["LOW"])
+        today_vol   = float(today["VOLUME"])
+
+        if today_close < MIN_PRICE or today_close > MAX_PRICE:
+            continue
+        if today_vol < MIN_VOLUME:
+            continue
+
+        # previous LOOKBACK_DAYS bars excluding today
+        prev = df[df["DATE"] < scan_date].tail(LOOKBACK_DAYS)
+        if len(prev) < LOOKBACK_DAYS:
+            continue
+
+        week52_high = float(prev["HIGH"].max())
+
+        # EMA21 from closes (including today)
+        ema21 = float(compute_ema(df["CLOSE"], EMA_PERIOD).iloc[-1])
+
+        price_breakout = today_high > week52_high
+        green_candle   = today_close > today_open
+        above_ema      = today_close > ema21
+
+        if not (price_breakout and green_candle and above_ema):
+            continue
+
+        sl_price = today_low
+        sl_pct = round((today_close - sl_price) / today_close * 100, 2)
+
+        target_price = round(today_close + 2 * (today_close - sl_price), 2)
+        target_pct   = round(sl_pct * 2, 2)
+
+        results.append({
+            "symbol": sym,
+            "close": round(today_close, 2),
+            "week52_high": round(week52_high, 2),
+            "ema21": round(ema21, 2),
+            "volume": int(today_vol),
+            "sl_price": round(sl_price, 2),
+            "sl_pct": sl_pct,
+            "target_price": target_price,
+            "target_pct": target_pct,
+        })
+
+    return results
+
+# ──────────────────────────────────────────────────────────────
+# MAIN
+# ──────────────────────────────────────────────────────────────
+
+def run():
+    print("\n" + "=" * 60)
+    print("NSE Breakout Scanner (Bhavcopy Based)")
+    print("=" * 60 + "\n")
+
+    bhav, bhav_date = get_latest_bhavcopy()
+    if bhav is None:
+        print("❌ Could not download bhavcopy for last 10 days.")
+        return
+
+    today_df = normalize_bhavcopy(bhav, bhav_date)
+
+    history = load_history()
+    history = update_history(history, today_df)
+
+    # Keep only last ~400 trading days for smaller file
+    cutoff = pd.to_datetime(bhav_date) - timedelta(days=600)
+    history = history[history["DATE"] >= cutoff]
+
+    save_history(history)
+
+    scan_date_str = bhav_date.strftime("%Y-%m-%d")
+    results = scan_breakouts(history, scan_date_str)
+
+    today_str = bhav_date.strftime("%d %b %Y")
 
     if not results:
         send_telegram(
             f"📊 <b>NSE Breakout Scanner — {today_str}</b>\n\n"
-            f"No breakouts found.\n\n"
-            f"Scanned: {total}\n"
-            f"Failed: {len(failed)}\n\n"
+            f"No breakouts found today.\n\n"
             f"<i>Filters: ₹{int(MIN_PRICE)}–₹{int(MAX_PRICE)} | "
-            f"Green candle | Above 21 EMA | High > 52W High</i>"
+            f"Green candle | Close > 21 EMA | High > 52W High</i>"
         )
+        print("No breakouts.")
         return
 
-    results.sort(key=lambda x: x["vol_ratio"], reverse=True)
+    # Sort by volume descending
+    results.sort(key=lambda x: x["volume"], reverse=True)
 
     send_telegram(
         f"🚀 <b>NSE Breakout Scanner — {today_str}</b>\n\n"
         f"<b>{len(results)} breakout(s) found</b>\n"
-        f"Scanned: {total}\n"
-        f"Failed: {len(failed)}\n"
-        f"Sorted by volume ratio ↓"
+        f"Sorted by volume ↓"
     )
     time.sleep(0.5)
 
     for batch_start in range(0, len(results), 10):
         batch = results[batch_start:batch_start + 10]
         lines = []
-
         for r in batch:
             lines.append(
                 f"──────────────────\n"
-                f"📌 <b>{r['symbol']}</b>  {r['breakout_type']}\n"
+                f"📌 <b>{r['symbol']}</b>\n"
                 f"   Close    : ₹{r['close']}\n"
                 f"   52W High : ₹{r['week52_high']}\n"
-                f"   Volume   : {r['vol_ratio']}x avg\n"
                 f"   21 EMA   : ₹{r['ema21']}\n"
+                f"   Volume   : {r['volume']}\n"
                 f"   SL       : ₹{r['sl_price']} (-{r['sl_pct']}%)\n"
                 f"   Target   : ₹{r['target_price']} (+{r['target_pct']}%)\n"
             )
-
         send_telegram("\n".join(lines))
         time.sleep(0.5)
 
@@ -274,4 +325,4 @@ def run_scanner():
     )
 
 if __name__ == "__main__":
-    run_scanner()
+    run()
